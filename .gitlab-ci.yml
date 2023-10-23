@@ -1,0 +1,122 @@
+image: python:3.9
+stages:
+  - test
+  - coverage
+  - sonarqube
+  - deploy
+
+.fastapi_before_script: &fastapi_before_script |-
+  pip install -r requirements.txt
+
+include:
+  - template: Code-Quality.gitlab-ci.yml
+
+code_quality:
+  stage: test
+  artifacts:
+    paths: [gl-code-quality-report.json]
+
+UnitTest Prod:
+  rules:
+  # Kalo pas di merge error inget tambahin condition buat merge disini (https://docs.gitlab.com/ee/ci/yaml/#rules)
+    - if: '$CI_COMMIT_REF_NAME == "prod"'
+  stage: test
+  before_script:
+    - *fastapi_before_script
+  environment:
+    name: development
+  script:
+    - pytest
+
+UnitTest Dev:
+  rules:
+  # Kalo pas di merge error inget tambahin condition buat merge disini (https://docs.gitlab.com/ee/ci/yaml/#rules)
+    - if: '$CI_COMMIT_REF_NAME != "prod"'
+  stage: test
+  before_script:
+    - *fastapi_before_script
+  script:
+    - pytest
+
+Coverage Prod:
+  rules:
+  # Kalo pas di merge error inget tambahin condition buat merge disini (https://docs.gitlab.com/ee/ci/yaml/#rules)
+    - if: '$CI_COMMIT_REF_NAME == "prod"'
+  stage: coverage
+  before_script:
+    - *fastapi_before_script
+  script:
+    - coverage run -m pytest  
+    - coverage report -m
+    - coverage xml
+  environment:
+    name: development
+  artifacts:
+    paths:
+      - coverage.xml
+
+Coverage Dev:
+  rules:
+  # Kalo pas di merge error inget tambahin condition buat merge disini (https://docs.gitlab.com/ee/ci/yaml/#rules)
+    - if: '$CI_COMMIT_REF_NAME != "prod"'
+  stage: coverage
+  before_script:
+    - *fastapi_before_script
+  script:
+    - coverage run -m pytest  
+    - coverage report -m
+    - coverage xml
+  coverage: '/TOTAL.*\s+(\d+\%)/'
+  artifacts:
+    paths:
+      - coverage.xml
+
+
+Deployment Prod:
+  rules:
+  # Kalo pas di merge error inget tambahin condition buat merge disini (https://docs.gitlab.com/ee/ci/yaml/#rules)
+    - if: '$CI_COMMIT_REF_NAME == "prod"'
+  image: ruby:2.7
+  stage: deploy
+  before_script:
+    - gem install dpl
+    - wget -qO- https://cli-assets.heroku.com/install-ubuntu.sh | sh
+  script:
+    - dpl --provider=heroku --app=$PROD_HEROKU_APP_NAME --api-key=$HEROKU_API_KEY
+    - heroku run --app $PROD_HEROKU_APP_NAME migrate
+  environment:
+    name: production
+    url: https://$PROD_HEROKU_APP_NAME.herokuapp.com
+
+Deployment Dev:
+  rules:
+  # Kalo pas di merge error inget tambahin condition buat merge disini (https://docs.gitlab.com/ee/ci/yaml/#rules)
+    - if: $CI_COMMIT_REF_NAME == "dev" && $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME != "dev"
+  image: ruby:2.7
+  stage: deploy
+  before_script:
+    - gem install dpl
+    - wget -qO- https://cli-assets.heroku.com/install-ubuntu.sh | sh
+  script:
+    - dpl --provider=heroku --app=$DEV_HEROKU_APP_NAME --api-key=$HEROKU_API_KEY
+    - heroku run --app $DEV_HEROKU_APP_NAME migrate
+  environment:
+    name: development
+    url: https://$DEV_HEROKU_APP_NAME.herokuapp.com
+
+SonarScanner Dev:
+  image:
+    name: sonarsource/sonar-scanner-cli:4.6
+    entrypoint: [""]
+  stage: sonarqube
+  script:
+    - sonar-scanner
+      -Dsonar.host.url=https://sonarqube.cs.ui.ac.id/
+      -Dsonar.login=$SONAR_TOKEN
+      -Dsonar.projectKey=$PROJECT_KEY
+      -Dsonar.sources=.
+  only:
+    - dev
+  dependencies:
+    - Coverage Dev
+    
